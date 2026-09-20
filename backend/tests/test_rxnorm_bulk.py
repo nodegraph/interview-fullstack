@@ -190,6 +190,42 @@ def test_concurrent_claims_only_one_worker_wins(no_import):
     assert sum(run is not None for run in claimed) == 1
 
 
+@pytest.mark.parametrize("state", ["owned", "expired", "replaced", "done"])
+def test_heartbeat_renews_only_the_active_owner(no_import, state):
+    run = bulk._claim(SessionLocal)
+    with SessionLocal() as db:
+        row = db.get(CatalogImportJob, 1)
+        row.lease_expires_at = time.time() + 10
+        if state == "expired":
+            row.lease_expires_at = time.time() - 1
+        elif state == "replaced":
+            row.owner_token = "replacement-owner"
+        elif state == "done":
+            row.state = "done"
+        expected_expiry = row.lease_expires_at
+        db.commit()
+
+    class OneHeartbeat:
+        calls = 0
+
+        def wait(self, timeout):
+            self.calls += 1
+            return self.calls > 1
+
+    run.stopped = OneHeartbeat()
+    bulk._heartbeat(run)
+    with SessionLocal() as db:
+        row = db.get(CatalogImportJob, 1)
+        if state == "owned":
+            assert row.lease_expires_at > expected_expiry + 90
+            assert not run.lost.is_set()
+        else:
+            assert row.lease_expires_at == expected_expiry
+            assert run.lost.is_set()
+        if state == "replaced":
+            assert row.owner_token == "replacement-owner"
+
+
 def test_lost_owner_cannot_write_catalog(no_import):
     first = bulk._claim(SessionLocal)
     with SessionLocal() as db:

@@ -1,80 +1,92 @@
 # Testing summary
 
-## Status at the implementation deadline
+## Final verification results
 
-Final testing is intentionally deferred to a separate pass, as requested by the
-user. The results below describe checks already completed during development;
-they are not a claim that the final combined working tree has passed every check.
-No final live-provider, migration, or deployment test was started after that
-instruction. An importer test run already in progress finished afterward.
-
-## Completed checks
+The separate final testing pass is complete. All automated checks below passed
+after the relevant fixes. Database test writes used isolated local databases;
+the existing Render deployment received read-only requests.
 
 | Check | Observed result | Scope and limits |
 | --- | --- | --- |
-| Earlier complete backend regression suite | 73 passed | Before the latest dosage, fallback, and importer additions |
-| Dosage/form tests | 28 passed | Literal strengths, concentrations, forms, Unicode, parentheses, repeated names, boundaries, no inference from unitless/lab values |
-| Dosage + RxNav fallback focused run | 41 passed | Includes 13 mocked HTTP fallback cases; no real external services |
-| Transcript acceptance + fallback run | 15 passed | Actual sample files, mocked extraction, real matching and expanded spans |
-| Importer + API run | 37 passed | 19 importer tests plus 18 API tests against isolated local Postgres; a small parser correction followed this run and is not rerun yet |
-| Frontend tests | 19 passed | Three Vitest/Testing Library suites using jsdom and mocked fetch |
-| Frontend production build | Passed | TypeScript and Vite; completed before the final-testing deferral |
-| Earlier live OpenAI samples | 7/7 and 12/12 mentions | gpt-4.1-mini, correct RxCUIs/corrections; before the final dosage/fallback integration |
-| Earlier live ambiguity example | Passed after fixes | Unicode, ASA score versus medication, APAP, and negated aspirin |
-| Full ingredient matching check | Expected sample typos resolved | 14,689 live RxNav ingredients with seed brand aliases; full brand enrichment was not fetched |
-| Existing Render deployment | Read-only checks passed | Homepage 200, DB healthy, catalog count 14,689; latest local code is not verified there |
+| Complete backend regression suite | **141 passed, 2 skipped** | Includes extraction, matching, dosage, fallback, importer, and API tests; the two opt-in live cases ran separately |
+| Live OpenAI sample analyses | **2 passed** | gpt-4.1-mini; transcript 01: 7/7 mentions; transcript 02: 12/12; expected RxCUIs, corrections, and dosage spans |
+| Frontend component tests | **22 passed** | Three Vitest/Testing Library suites with jsdom and mocked fetch |
+| Frontend production build | **Passed** | TypeScript and Vite |
+| Migration 004 → 005 | **Passed** | Disposable PostgreSQL database; clinician, patient, visit, medication enrichment, and job data preserved; new defaults and stale-job recovery verified |
+| Live RxNav fallback | **Passed** | MTX → 6851, vitamin D → 11253, folic acid → 4511 |
+| Live ingredient import | **Passed** | 20 ingredients created, zero warnings, isolated local database |
+| Bounded live import enrichment | **Passed** | Metformin/6809 updated with Glucophage and Biguanide, zero warnings; combination brand Janumet excluded |
+| Existing Render deployment | **Read-only smoke passed** | Homepage, health, catalog, and OpenAPI all HTTP 200; database connected; 14,689 concepts; latest implementation is not deployed |
+| Patch whitespace check | **Passed** | `git diff --check` |
 
-These counts overlap. Do not add them together as a final suite total.
+The live sample cases fetched the full 14,689-ingredient catalog with seed brand
+aliases and exercised the real extraction/matching/dosage pipeline. Live import
+checks parsed 5,118 brands, 756 EPC classes, and 1,319 ATC classes, but detail
+requests were restricted to representative entries. Full brand/class enrichment
+fanout was not rerun. These external checks are snapshots, not guarantees of
+future provider availability or deterministic LLM output.
 
-## Backend coverage
+## Bugs found and fixed
 
-- Exact names, brands, synonyms, reviewed shorthand, misspellings, correct spelling
-  display, competing concepts, short unknown strings, and repeated mentions.
-- Strict provider output, invalid/invented spans, Unicode offsets, invalid
-  occurrence numbers, unique-source recovery, score context, and provider errors.
-- Index reuse, invalidation on committed catalog updates, rollback behavior, and
-  protecting cached data from mutation by callers.
-- Adjacent dosage/form expansion in either order, known units, concentration
-  ratios, literal text preservation, no crossing lines or other drug mentions,
-  and stable original-name corrections.
-- Fallback exact-search parameters, verified ingredient properties, single-ingredient
-  brand relationships, rejection of combinations and ambiguous IDs, cache behavior,
-  timeout/outage degradation, request limits, and deadline exhaustion.
-- Import preservation, malformed upstream results, retries, pacing, partial failure
-  warnings, active/expired leases, ownership checks, and API response behavior.
+1. **Saving while navigating:** a late save response for one visit could replace
+   the visit currently being viewed, or show an obsolete error. Save requests now
+   have cancellation and response guards; navigation resets save state. Draft
+   fields are disabled during saving. Regression tests cover both success and
+   failure arriving after navigation.
+2. **Out-of-order catalog searches:** an older response could overwrite a newer
+   search. Superseded requests are canceled and their results ignored. The
+   regression test deliberately delivers the older response last.
+3. **Malformed provider envelopes:** null/list message objects raised an
+   unhandled `AttributeError`. Response-shape validation now converts these to
+   the handled 502 provider error. Four envelope cases cover null/list messages,
+   an empty choices list, and a null choice. The first two failed before the fix.
+4. **Runtime dependency declaration:** `httpx` was only a development dependency
+   in `pyproject.toml`, despite runtime use. It is now a normal dependency, matching
+   the production requirements file.
 
-## Frontend coverage
+Four additional importer regression cases verify heartbeat behavior for the
+active owner, expired lease, replacement owner, and completed job. All 23 importer
+tests pass; no importer implementation defect was reproduced in this pass.
 
-The tests exercise actual components, including keyboard detail selection,
-name-only corrections for expanded highlights, brands without false corrections,
-unresolved details, loading/empty/error/retry states, Unicode and repeated spans,
-stale note/visit responses, request cancellation, StrictMode duplicate prevention,
-edit/cancel reuse, successful-save reanalysis, failed-save draft retention, and
-import warning display.
+## Coverage
 
-jsdom tests do not replace a visual browser check. No browser was available through
-the connected computer-use tool during this pass.
+Backend coverage includes exact names, brands, synonyms, reviewed shorthand,
+misspellings, competing concepts, unknown strings, repeated mentions, Unicode
+offsets, invalid/invented spans, ASA score context, and provider failures. Index
+tests check reuse, commit invalidation, rollback behavior, and snapshot isolation.
+Dosage tests cover literal strength/form ordering, concentrations, parentheses,
+boundaries, and exclusion of unrelated numbers. Fallback tests cover exact
+searches, ingredient validation, combination rejection, cache behavior, timeouts,
+request limits, and deadline exhaustion. Import tests exercise preservation,
+malformed results, pacing/retries, warning visibility, leases, ownership, and
+interrupted-job recovery.
 
-## Commands for the separate verification pass
+Frontend coverage includes keyboard selection, source-preserving highlights,
+name-only corrections, unresolved details, loading/empty/error/retry states,
+Unicode and repeated spans, stale analysis responses, StrictMode request
+deduplication, edit/cancel reuse, save reanalysis, failed-save draft retention,
+navigation during saves, catalog search races, and import warning display.
 
-From the repository root, start local Postgres:
+## Repeating the checks
+
+Start local PostgreSQL from the repository root:
 
 ```bash
 docker compose up -d
 ```
 
-Run the complete backend suite against the dedicated test database:
+Run the complete backend suite:
 
 ```bash
 cd backend
-TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/visit_tracker_test .venv/bin/pytest -v
+TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/visit_tracker_test .venv/bin/pytest -q
 ```
 
-The fixtures create/migrate the test database. They do not use the app's configured
-DATABASE_URL for test writes. RxNav fallback is disabled by default in tests;
-fallback tests inject mocked HTTP responses. Two live-provider cases are skipped
-unless explicitly enabled. Existing dependency deprecation warnings concern
-Starlette/httpx test-client integration and the AnyIO BlockingPortal alias.
+Fixtures create/migrate the dedicated test database and do not use the app's
+configured `DATABASE_URL` for test writes. RxNav fallback is disabled by default;
+fallback unit tests inject HTTP responses. Two dependency deprecation warnings
+remain for Starlette/httpx test-client integration and AnyIO's BlockingPortal
+alias; neither caused failures.
 
 Run frontend checks:
 
@@ -85,33 +97,34 @@ npm test
 npm run build
 ```
 
-An opt-in live check is now included for repeatability:
+Run the opt-in live sample checks:
 
 ```bash
 cd backend
 RUN_LIVE_ANALYSIS=1 .venv/bin/pytest tests/test_live_analysis.py -v -s
 ```
 
-This command sends only the two bundled exercise transcripts to OpenAI, uses the
-configured key/model, fetches live RxNav ingredients, and creates a disposable
-in-memory SQLite catalog with seed brand aliases. It exercises the real analysis
-pipeline, including dose/form spans, without modifying application data. It incurs
-provider usage and depends on network availability. The newly added opt-in tests
-have not yet been run as part of this final implementation stage.
+This sends only the two bundled exercise transcripts to OpenAI, uses the configured
+key/model, fetches live RxNav ingredients, and creates a disposable in-memory
+SQLite catalog with seed brand aliases. It exercises dosage/form spans without
+modifying application data. It incurs provider usage and requires network access.
 
-## Remaining checklist
+Migration and bounded live import checks were also executed as one-off verification
+scripts against isolated local databases. They are distinct from the repeatable
+regression suite above.
 
-1. Rerun the full backend and frontend suites on the final tree, including the
-   importer's last parser correction and the new migration.
-2. Run the opt-in live analysis cases and a targeted live fallback check for MTX,
-   vitamin D, and folic acid with the small seed catalog.
-3. Verify migration 005 against a disposable database upgraded from revision 004.
-4. Perform an actual import with enrichment, then simulate interruption/restart and
-   rate-limit failures. Automated tests cover these mechanisms; no full live import
-   of the new implementation has been performed.
-5. Publish/deploy the changes and confirm startup migrations, LLM service settings,
-   health, and catalog preservation.
-6. Open both notes in a browser: inspect every highlight, correction, dosage/form,
-   keyboard interaction, edit/save/retry behavior, and slow-request navigation.
-7. Record the short explanation video and include the deployed URL and repository
-   link in the submission. Do not include credentials in the recording or transcript.
+## Remaining delivery checks
+
+1. Deploy these changes, confirm startup migration 005 and server LLM settings,
+   then smoke-test the updated deployment. The supplied Render URL currently
+   exposes the earlier schema without `MedicationMention.name_text` or import
+   warning fields; healthy responses do not verify these local fixes in production.
+2. Perform a visual browser check of both notes, including highlight layout,
+   keyboard interaction, corrections, dosage/form details, edits, and retries.
+   The connected computer-use tool reported no available browsers; jsdom tests
+   do not substitute for this check.
+3. Optionally run a complete live catalog enrichment job and observe a real
+   process interruption/restart. Automated tests cover retry/lease/recovery
+   behavior; bounded live checks do not exercise the full external workload.
+4. Record the short explanation video and include the deployed URL and repository
+   link in the submission. Avoid credentials in recordings and transcripts.

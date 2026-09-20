@@ -5,9 +5,10 @@ source spans locally, and resolves medication names against an indexed RxNorm
 catalog. It now includes both exercise stretches: adjacent strength/form
 highlighting and a more resilient catalog importer.
 
-The final combined testing and deployment pass is deferred at the user's request
-to meet the 6:27 pm implementation deadline. See [TESTING.md](TESTING.md) for
-completed checks and the remaining validation checklist.
+The separate final verification pass is complete: 141 backend tests, 22 frontend
+tests, the production frontend build, both live sample-note analyses, migration
+preservation, and bounded live RxNav checks passed. See [TESTING.md](TESTING.md)
+for results, bugs fixed, and the remaining deployment and visual checks.
 
 ## Analysis pipeline
 
@@ -15,6 +16,8 @@ completed checks and the remaining validation checklist.
    validates the response with Pydantic. The default is `gpt-4.1-mini`, configurable
    through `LLM_MODEL`. The model returns literal names, occurrence numbers, and
    optional suggested names. It does not supply RxCUIs or authoritative drug data.
+   Malformed response envelopes produce a handled provider error with a retry
+   action, including null or non-object messages.
 2. **Anchor source text.** Python locates exact, case-sensitive whole-name
    occurrences. Unknown source text is rejected. If a name occurs only once,
    its location is unambiguous even if the model numbers it incorrectly.
@@ -120,6 +123,12 @@ stale results from replacing current content. Keeping the analyzer mounted while
 editing avoids another paid call when editing is canceled. StrictMode's abandoned
 initial effect does not start a duplicate request.
 
+Final regression testing also exposed stale save and catalog-search responses.
+Navigating between visits now cancels the pending save and ignores its result,
+while resetting the new visit's save state. Draft fields are disabled during
+saving. New catalog searches cancel earlier requests so older results cannot
+replace the current search.
+
 ## Catalog import resilience
 
 - Names-first upserts preserve existing brand/class data. Missing, disabled, or
@@ -150,11 +159,13 @@ Backend settings come from `backend/.env` or service environment variables.
 LLM keys server-side. The defaults are `LLM_PROVIDER=openai`,
 `LLM_MODEL=gpt-4.1-mini`, and enabled RxNav fallback.
 
-The supplied deployment is https://visit-tracker-fv1z.onrender.com. A read-only
-check during implementation returned HTTP 200 for the homepage, healthy database
-status, and 14,689 catalog concepts. This checks the existing deployment, not
-these latest local changes. Publishing the changes, applying the migration on
-that deployment, and a deployed end-to-end smoke test belong to the next pass.
+The supplied deployment is https://visit-tracker-fv1z.onrender.com. Final read-only
+checks returned HTTP 200 for the homepage, health, catalog, and OpenAPI schema;
+the database is healthy and the catalog contains 14,689 concepts. Its schema
+still lacks the new original-name and import-warning fields, confirming that
+the latest local implementation is not deployed there. Publishing these changes,
+running the startup migration, and testing the updated deployment remain pending.
+A connected browser was unavailable, so visual verification also remains pending.
 
 Remaining limits include exact product/combination representation, broader
 context evaluation, resumable import checkpoints, and shared index invalidation

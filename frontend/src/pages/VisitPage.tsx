@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { formatDate } from "../dates";
 import MedicationNotes from "../components/MedicationNotes";
@@ -29,6 +29,7 @@ export default function VisitPage() {
   const [notes, setNotes] = useState("");
   const [chiefComplaint, setChiefComplaint] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const saveController = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const clinicianId = localStorage.getItem("clinicianId");
@@ -45,6 +46,8 @@ export default function VisitPage() {
     setLoading(true);
     setVisit(null);
     setEditMode(false);
+    setSaving(false);
+    setSaveError(null);
     const loadVisit = async () => {
       try {
         const res = await fetch(`/api/visits/${visitId}`, { signal: controller.signal });
@@ -64,13 +67,17 @@ export default function VisitPage() {
     return () => {
       active = false;
       controller.abort();
+      saveController.current?.abort();
+      saveController.current = null;
     };
   }, [visitId, navigate]);
 
   const handleSave = async () => {
-    if (!visitId) {
+    if (!visitId || saveController.current) {
       return;
     }
+    const controller = new AbortController();
+    saveController.current = controller;
     setSaving(true);
     setSaveError(null);
     try {
@@ -78,19 +85,28 @@ export default function VisitPage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chief_complaint: chiefComplaint, notes }),
+        signal: controller.signal,
       });
       const data = await res.json();
+      if (controller.signal.aborted) return;
       if (res.ok && data.visit) {
         setVisit((prev) => (prev ? { ...prev, ...data.visit } : data.visit));
+        setNotes(data.visit.notes || "");
+        setChiefComplaint(data.visit.chief_complaint || "");
         setEditMode(false);
       } else {
         setSaveError(data.error || `Save failed (${res.status})`);
       }
     } catch (e) {
+      if (controller.signal.aborted) return;
       console.error("Failed to save:", e);
       setSaveError("Save failed: could not reach the server");
+    } finally {
+      if (saveController.current === controller) {
+        saveController.current = null;
+        setSaving(false);
+      }
     }
-    setSaving(false);
   };
 
   if (loading) {
@@ -161,6 +177,7 @@ export default function VisitPage() {
           <input
             type="text"
             value={chiefComplaint}
+            disabled={saving}
             onChange={(e) => setChiefComplaint(e.target.value)}
             className="w-full border rounded-lg px-4 py-2"
             placeholder="Enter chief complaint..."
@@ -191,6 +208,7 @@ export default function VisitPage() {
           <textarea
             aria-label="Visit notes"
             value={notes}
+            disabled={saving}
             onChange={(e) => setNotes(e.target.value)}
             rows={8}
             className="w-full border rounded-lg px-4 py-3 font-mono text-sm"

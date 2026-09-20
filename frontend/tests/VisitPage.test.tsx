@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import VisitPage from "../src/pages/VisitPage";
-import { analysis, mention, response } from "./fixtures";
+import { analysis, deferred, mention, response } from "./fixtures";
 
 const visit = {
   id: "visit-1", patient_id: "patient-1", clinician_id: "clinician-1",
@@ -14,9 +14,10 @@ const visit = {
 };
 
 function renderVisit() {
-  return render(<MemoryRouter initialEntries={["/patients/patient-1/visits/visit-1"]}>
-    <Routes><Route path="/patients/:id/visits/:visitId" element={<VisitPage />} /></Routes>
-  </MemoryRouter>);
+  const router = createMemoryRouter([
+    { path: "/patients/:id/visits/:visitId", element: <VisitPage /> },
+  ], { initialEntries: ["/patients/patient-1/visits/visit-1"] });
+  return { ...render(<RouterProvider router={router} />), router };
 }
 
 describe("visit editing and medication analysis", () => {
@@ -85,5 +86,40 @@ describe("visit editing and medication analysis", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByRole("button", { name: /aspirin.*Show details/ })).toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([url]) => url.endsWith("/analyze"))).toHaveLength(1);
+  });
+
+  it.each([200, 503])("ignores a previous visit's save response (%s) after navigation", async (status) => {
+    const save = deferred<Response>();
+    const secondVisit = { ...visit, id: "visit-2", notes: "Second visit notes." };
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (options?.method === "PUT") return save.promise;
+      const current = url.includes("visit-2") ? secondVisit : visit;
+      if (url.endsWith("/analyze")) return response({ analysis: analysis(current.notes, [], current.id) });
+      return response({ visit: current });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    const { router } = renderVisit();
+    await screen.findByText("No medication mentions found.");
+    await user.click(screen.getAllByRole("button", { name: "Edit" })[1]);
+    await user.clear(screen.getByRole("textbox", { name: "Visit notes" }));
+    await user.type(screen.getByRole("textbox", { name: "Visit notes" }), "Saved first note");
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await act(async () => { await router.navigate("/patients/patient-1/visits/visit-2"); });
+    expect(await screen.findByText("Second visit notes.")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Edit" })[1]);
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "Visit notes" })).toBeEnabled();
+
+    await act(async () => { save.resolve(response(status === 200
+      ? { visit: { ...visit, notes: "Saved first note" } }
+      : { error: "First visit save failed" }, status)); });
+    expect(screen.getByRole("textbox", { name: "Visit notes" })).toHaveValue("Second visit notes.");
+    expect(screen.queryByText("First visit save failed")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("Second visit notes.")).toBeInTheDocument();
+    expect(screen.queryByText("Saved first note")).not.toBeInTheDocument();
+    const saveOptions = fetchMock.mock.calls.find(([, options]) => options?.method === "PUT")![1];
+    expect(saveOptions?.signal?.aborted).toBe(true);
   });
 });

@@ -115,6 +115,8 @@ def extract_mentions(note: str) -> list[ExtractedMention]:
             response.raise_for_status()
             choice = response.json()["choices"][0]
             message = choice["message"]
+            if not isinstance(message, dict):
+                raise ValueError("The provider message must be an object.")
             if choice.get("finish_reason") != "stop" or message.get("refusal"):
                 raise ExtractionError("Medication analysis could not complete. Please retry.")
             return ExtractionResult.model_validate_json(message["content"]).mentions

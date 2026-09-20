@@ -201,3 +201,26 @@ def test_extract_reports_provider_network_errors(monkeypatch):
         extraction.extract_mentions("Taking metformin.")
 
     assert error.value.status_code == 502
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"choices": [{"finish_reason": "stop", "message": None}]},
+        {"choices": [{"finish_reason": "stop", "message": []}]},
+        {"choices": []},
+        {"choices": [None]},
+    ],
+)
+def test_extract_reports_malformed_provider_envelopes(monkeypatch, payload):
+    configure_provider(monkeypatch)
+
+    def post(_client, url, **_kwargs):
+        return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx.Client, "post", post)
+    with pytest.raises(extraction.ExtractionError) as error:
+        extraction.extract_mentions("Taking metformin.")
+
+    assert error.value.status_code == 502
+    assert "invalid result" in str(error.value)

@@ -25,8 +25,12 @@ export default function MedicationsPage() {
   const [newNames, setNewNames] = useState("");
   const [scraping, setScraping] = useState(false);
   const pollRef = useRef<number | null>(null);
+  const catalogController = useRef<AbortController | null>(null);
 
   const load = useCallback(async (term: string, from: number) => {
+    catalogController.current?.abort();
+    const controller = new AbortController();
+    catalogController.current = controller;
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -36,29 +40,39 @@ export default function MedicationsPage() {
       if (term.trim()) {
         params.set("search", term.trim());
       }
-      const res = await fetch(`/api/medications?${params}`);
+      const res = await fetch(`/api/medications?${params}`, { signal: controller.signal });
       const data = await res.json();
-      if (data.error) {
-        setError(data.error);
+      if (controller.signal.aborted) return;
+      if (!res.ok || data.error) {
+        setError(data.error || `Could not load the catalog (${res.status}).`);
       } else {
         setMedications(data.medications || []);
         setTotal(data.total ?? 0);
         setError(null);
       }
     } catch (e) {
+      if (controller.signal.aborted) return;
       console.error("Failed to load medications:", e);
       setError("Could not load the catalog.");
+    } finally {
+      if (catalogController.current === controller) {
+        catalogController.current = null;
+        if (!controller.signal.aborted) setLoading(false);
+      }
     }
-    setLoading(false);
   }, []);
 
   // Debounce search so typing does not fire a query per keystroke.
   useEffect(() => {
+    setLoading(true);
+    setOffset(0);
     const handle = setTimeout(() => {
-      setOffset(0);
       void load(search, 0);
     }, 250);
-    return () => clearTimeout(handle);
+    return () => {
+      clearTimeout(handle);
+      catalogController.current?.abort();
+    };
   }, [search, load]);
 
   const pollJob = useCallback(() => {
