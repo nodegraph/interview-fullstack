@@ -20,4 +20,4 @@ services:
       # - key: LLM_API_KEY
       #   sync: false
       # - key: LLM_MODEL
-      #   value: gpt-4o-mini
+      #   value: gpt-4.1-mini

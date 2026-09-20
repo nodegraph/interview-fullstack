@@ -23,14 +23,36 @@ First-pass scope and tradeoffs:
   from other processes or external writes. Index rebuilding is lazy.
 - Notes are capped at 20,000 characters and 200 extracted mentions. Editing
   aborts the browser request, though an in-flight provider call can still finish.
-- Deterministic tests mock the LLM. Live extraction still needs a configured key
-  and a manual check against the supplied transcripts.
+- Deterministic tests mock the LLM. Live checks with the configured model are
+  recorded below; repeat them when changing the prompt or model.
 
-First-pass verification: all 67 backend tests pass, including both transcript
+First-pass verification: all 73 backend tests pass, including both transcript
 answer keys with mocked extraction; the frontend TypeScript/Vite build passes.
-The matcher also resolved the sample misspellings against 14,689 live RxNav
-ingredient concepts with seed brand aliases added in memory. That check did not
-fetch the full brand enrichment or exercise live LLM extraction.
+Live extraction with the default `gpt-4.1-mini` returns all 7 expected mentions from
+transcript 01 and all 12 from transcript 02, with correct spans, RxCUIs, match
+types, and corrections. Those live checks used 14,689 RxNav ingredient concepts
+plus seed brand aliases in memory, without changing the application's catalog.
+With only seed data, MTX, vitamin D, and folic acid remain unresolved as expected.
+The checks did not fetch full brand enrichment and are not a general accuracy
+benchmark.
+
+Live testing exposed global list numbering in the model's occurrence field and
+omitted references in dosing discussions. The prompt now explicitly requires
+per-name literal occurrence counts and mentions across all note sections,
+including pharmacy confirmations and dosing discussions. The anchoring code
+also recovers an incorrect number when the literal name occurs exactly once;
+ambiguous repeated text still requires a valid occurrence. Regression tests
+cover this distinction, including a non-medication ASA score before an ASA
+medication mention.
+
+An additional live example combined Unicode, an ASA physical-status score,
+ASA medication use, APAP, and negated aspirin use. Small models incorrectly
+treated the ASA score as medication, so anchoring now excludes explicit ASA
+score/class phrases with a numeric or Roman-numeral value. `gpt-4o-mini` also
+omitted the negated aspirin mention; `gpt-4.1-mini` retained it and passed both
+supplied notes, so it is the new default. `LLM_MODEL` remains configurable.
+The extra example now passes, but this narrow guard is not a general solution
+to all ambiguous abbreviations.
 
 The provider request uses strict JSON-schema output, following the
 [official OpenAI structured-output documentation](https://developers.openai.com/api/docs/guides/structured-outputs).
@@ -227,9 +249,9 @@ checks for unchanged reconstructed text, keyboard access, and discarded stale
 responses. Confirm that repeated lookups reuse the index and rank a candidate
 shortlist instead of all catalog rows.
 
-Run the backend tests, the frontend production build, and a manual smoke test of
-both transcripts with the real LLM on the deployed application. These checks are
-planned validation, not results already obtained.
+Run the backend tests and frontend production build before delivery, and repeat
+the sample-note smoke test on the deployed application. Local verification
+results are recorded above; a deployed browser smoke test is still outstanding.
 
 ## Stretch goals and priorities
 

@@ -76,13 +76,38 @@ def test_anchor_deduplicates_spans_and_prefers_longest_overlap():
     [
         mention("invented medication"),
         mention("Metformin"),  # Source text must preserve its original casing.
-        mention("metformin", 2),
         mention("formin"),  # A substring of a drug name is not a whole mention.
     ],
 )
 def test_anchor_rejects_invented_or_invalid_source_occurrences(item):
     with pytest.raises(extraction.ExtractionError):
         extraction.anchor_mentions("Taking metformin daily.", [item])
+
+
+def test_anchor_recovers_global_numbering_only_for_unique_source_text():
+    note = "Advil and ibuprofen."
+    result = extraction.anchor_mentions(note, [mention("Advil", 1), mention("ibuprofen", 2)])
+    assert [(m.text, m.start) for m in result] == [("Advil", 0), ("ibuprofen", 10)]
+
+
+def test_anchor_rejects_invalid_number_when_source_location_is_ambiguous():
+    with pytest.raises(extraction.ExtractionError):
+        extraction.anchor_mentions("metformin then metformin", [mention("metformin", 3)])
+
+
+def test_anchor_keeps_context_selected_occurrence_instead_of_highlighting_a_score():
+    note = "ASA physical status II. Takes ASA 81 mg."
+    result = extraction.anchor_mentions(note, [mention("ASA", 2)])
+    assert len(result) == 1
+    assert result[0].start == note.rindex("ASA")
+
+
+@pytest.mark.parametrize("score", ["ASA class II", "ASA physical status II", "ASA physical status class 2", "ASA score: 2"])
+def test_anchor_filters_explicit_asa_scores_but_keeps_medication_use(score):
+    note = f"{score}. Takes ASA 81 mg."
+    result = extraction.anchor_mentions(note, [mention("ASA", 1), mention("ASA", 2)])
+    assert len(result) == 1
+    assert result[0].start == note.rindex("ASA")
 
 
 def test_extract_requests_structured_output_and_parses_response(monkeypatch):

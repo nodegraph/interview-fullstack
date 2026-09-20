@@ -68,7 +68,7 @@ your own to `backend/.env` (see `backend/.env.example`):
 
 ```bash
 LLM_PROVIDER=openai
-LLM_MODEL=gpt-4o-mini
+LLM_MODEL=gpt-4.1-mini
 LLM_API_KEY=sk-...
 ```
 

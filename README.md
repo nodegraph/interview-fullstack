@@ -122,7 +122,7 @@ The medication-detection exercise uses an LLM. Copy the extra settings from
 
 ```bash
 LLM_PROVIDER=openai
-LLM_MODEL=gpt-4o-mini
+LLM_MODEL=gpt-4.1-mini
 LLM_API_KEY=sk-...
 ```
 

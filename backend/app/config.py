@@ -17,13 +17,14 @@ class Settings(BaseSettings):
     # LLM configuration for the take-home medication-detection task.
     # Required for analysis; the rest of the app works without a key.
     llm_provider: str = "openai"
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "gpt-4.1-mini"
     llm_api_key: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
 
