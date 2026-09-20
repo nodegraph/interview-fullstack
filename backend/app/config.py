@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # RxNorm / RxNav public REST API (used as a fallback when a medication is
     # not already in the local reference catalog). No auth required.
     rxnav_base_url: str = "https://rxnav.nlm.nih.gov/REST"
+    rxnav_fallback_enabled: bool = True
 
     # LLM configuration for the take-home medication-detection task.
     # Required for analysis; the rest of the app works without a key.

@@ -43,7 +43,7 @@ function MentionDetails({ mention }: { mention: MedicationMention }) {
       </p>
       {mention.correction && mention.match_type === "misspelling" && (
         <p className="mt-2 text-sm text-amber-900">
-          Spelling correction: <span className="font-medium">{mention.text}</span>
+          Spelling correction: <span className="font-medium">{mention.name_text ?? mention.text}</span>
           {" → "}
           <span className="font-medium">{mention.correction}</span>
         </p>
@@ -70,6 +70,10 @@ function MentionDetails({ mention }: { mention: MedicationMention }) {
           <dd className="capitalize text-gray-800">{mention.match_type}</dd>
           <dt className="text-gray-500">Source</dt>
           <dd className="text-gray-800">{medication.source}</dd>
+        </dl>
+      )}
+      {(mention.strength || mention.dose_form) && (
+        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
           {mention.strength && (
             <>
               <dt className="text-gray-500">Strength in note</dt>
@@ -131,7 +135,11 @@ export default function MedicationNotes({ visitId, note }: MedicationNotesProps)
       }
     };
 
-    void analyze();
+    // StrictMode cleans up its first setup synchronously. Wait one microtask so
+    // that abandoned setup does not start a second billable analysis request.
+    void Promise.resolve().then(() => {
+      if (active) void analyze();
+    });
     return () => {
       active = false;
       controller.abort();
@@ -139,8 +147,8 @@ export default function MedicationNotes({ visitId, note }: MedicationNotesProps)
   }, [visitId, note, retry]);
 
   const parts = useMemo(
-    () => getNoteParts(note, analysis?.note === note ? analysis.mentions : []),
-    [note, analysis],
+    () => getNoteParts(note, analysis?.note === note && analysis.visit_id === visitId ? analysis.mentions : []),
+    [note, visitId, analysis],
   );
   const mentions = parts.flatMap((part) => part.mention ? [part.mention] : []);
   const unresolved = mentions.filter((mention) => !mention.matched).length;

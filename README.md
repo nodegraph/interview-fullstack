@@ -138,10 +138,14 @@ catalog match. Provider/configuration failures show an error and a retry button.
 Matching uses the complete local catalog, including separate brand aliases, with
 an exact map and a trigram shortlist for fuzzy comparisons. Import the full
 catalog to resolve ingredients missing from the 20-concept seed, including MTX,
-vitamin D, and folic acid. This first pass does not perform live RxNav fallback
-during analysis, infer product dosages, or harden the importer. Notes are limited
+vitamin D, and folic acid. Unresolved names use a bounded, verified RxNav fallback. Adjacent strength/form
+text is highlighted together with the drug name. Imports preserve enrichment,
+report partial failures, and recover stale jobs through renewable database leases.
+Product-level RxCUIs are not inferred. Notes are limited
 to 20,000 characters and 200 extracted mentions per analysis. See
-[SOLUTION.md](./SOLUTION.md) for the design and remaining work.
+[SOLUTION.md](./SOLUTION.md) for the design and remaining work, and
+[TESTING.md](./TESTING.md) for completed checks and the deferred final testing pass.
+Apply `alembic upgrade head` before starting the updated backend (migration 005).
 
 ## Tests
 

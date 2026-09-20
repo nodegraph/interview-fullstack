@@ -14,6 +14,9 @@ TEST_DATABASE_URL = os.environ.get(
     "postgresql://postgres:postgres@localhost:5432/visit_tracker_test",
 )
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+# Tests must not depend on live RxNav or accidentally spend time on network
+# fallbacks. Dedicated fallback tests inject a mock HTTP transport instead.
+os.environ["RXNAV_FALLBACK_ENABLED"] = "false"
 
 
 def _ensure_database(url: str) -> None:

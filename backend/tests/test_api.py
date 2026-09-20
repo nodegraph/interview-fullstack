@@ -346,14 +346,17 @@ def test_import_keeps_names_if_enrichment_fails(clean_catalog, client, monkeypat
     finally:
         db.close()
 
-    assert job.state == "error"
+    assert job.state == "done"
+    assert job.warning_count >= 1
+    assert "enrichment unavailable" in job.warnings[0]
     listed = client.get("/api/medications", params={"search": "montelukast"}).json()
     assert listed["total"] == 1
     assert listed["medications"][0]["drug_class"] is None
 
 
-def test_import_rejects_a_persisted_running_job(clean_catalog, client):
-    """A job left `running` in the DB blocks a new import; there is no TTL."""
+def test_import_rejects_a_persisted_active_lease(clean_catalog, client):
+    """An unexpired persisted lease blocks a second API worker."""
+    import time
     from app import rxnorm_bulk
     from app.database import SessionLocal
     from app.models import CatalogImportJob
@@ -369,6 +372,8 @@ def test_import_rejects_a_persisted_running_job(clean_catalog, client):
         row.started_at = "2026-01-01T00:00:00+00:00"
         row.finished_at = None
         row.error = None
+        row.owner_token = "active-other-worker"
+        row.lease_expires_at = time.time() + 120
         db.commit()
     finally:
         db.close()

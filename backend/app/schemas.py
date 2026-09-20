@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ClinicianOut(BaseModel):
@@ -98,7 +98,7 @@ class MedicationImportRequest(BaseModel):
     include_classes: bool = True
     include_brands: bool = True
     # Cap the number of concepts imported. Mostly for tests and quick trials.
-    limit: int | None = None
+    limit: int | None = Field(default=None, ge=1)
 
 
 class MedicationImportJob(BaseModel):
@@ -112,6 +112,8 @@ class MedicationImportJob(BaseModel):
     error: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
+    warning_count: int = 0
+    warnings: list[str] = []
 
 
 class MedicationMention(BaseModel):
@@ -125,7 +127,8 @@ class MedicationMention(BaseModel):
     in if you take the form/dosage stretch in EXERCISE.md.
     """
 
-    text: str  # the exact substring as written in the note
+    text: str  # the exact highlighted substring, including adjacent strength/form
+    name_text: str | None = None  # original drug name, before strength/form expansion
     start: int
     end: int
     matched: bool = False

@@ -104,11 +104,20 @@ def test_transcript_answer_keys_with_seed_and_expanded_catalog(
 
             assert len(results) == len(expected)
             for result, (text, rxcui, kind, correction) in zip(results, expected):
-                assert result.text == text
-                assert note[result.start : result.end] == text
+                assert result.name_text == text
+                assert note[result.start : result.end] == result.text
+                assert result.text.startswith(text)
                 assert result.matched is True
                 assert result.medication.rxcui == rxcui
                 assert result.match_type == kind
                 assert result.correction == correction
+            by_name = {result.name_text: result for result in results}
+            if filename == "transcript-01.txt":
+                assert by_name["lisinopril"].text == "lisinopril 20 mg"
+                assert by_name["metformin"].strength == "1000 mg"
+                assert by_name["ASA"].text == "ASA 81 mg"
+            else:
+                assert by_name["Ventolin"].text == "Ventolin inhaler"
+                assert by_name["Ventolin"].dose_form == "inhaler"
     finally:
         engine.dispose()

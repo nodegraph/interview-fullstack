@@ -187,19 +187,23 @@ export default function VisitPage() {
           )}
         </div>
 
-        {editMode ? (
+        {editMode && (
           <textarea
+            aria-label="Visit notes"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={8}
             className="w-full border rounded-lg px-4 py-3 font-mono text-sm"
             placeholder="Enter visit notes..."
           />
-        ) : visit.notes ? (
-          <MedicationNotes visitId={visit.id} note={visit.notes} />
-        ) : (
-          <p className="italic text-gray-400">No notes recorded</p>
         )}
+        <div hidden={editMode}>
+          {visit.notes ? (
+            <MedicationNotes visitId={visit.id} note={visit.notes} />
+          ) : (
+            <p className="italic text-gray-400">No notes recorded</p>
+          )}
+        </div>
       </div>
 
       {editMode && saveError && (
@@ -216,6 +220,7 @@ export default function VisitPage() {
             {saving ? "Saving..." : "Save Changes"}
           </button>
           <button
+            disabled={saving}
             onClick={() => {
               setEditMode(false);
               setSaveError(null);

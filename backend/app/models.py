@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -60,6 +60,10 @@ class CatalogImportJob(Base):
     error: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[str | None] = mapped_column(String(40))
     finished_at: Mapped[str | None] = mapped_column(String(40))
+    warning_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    warnings: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    owner_token: Mapped[str | None] = mapped_column(String(36))
+    lease_expires_at: Mapped[float | None] = mapped_column(Float)
 
 
 class Medication(Base):

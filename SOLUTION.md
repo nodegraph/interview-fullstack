@@ -1,293 +1,162 @@
-# Proposed solution: medication detection in visit notes
+# Medication detection solution
 
-Use an LLM to extract medication mentions from the note, then resolve those
-mentions against an indexed RxNorm catalog. The model helps interpret messy
-language; verified catalog records supply medication identities and structured
-attributes.
+The implementation uses one structured LLM extraction per saved note, validates
+source spans locally, and resolves medication names against an indexed RxNorm
+catalog. It now includes both exercise stretches: adjacent strength/form
+highlighting and a more resilient catalog importer.
 
-The core first pass is now implemented: structured LLM extraction, validated
-source spans, indexed catalog matching, and accessible highlights/details with
-loading, error, retry, and unresolved states. The design below also includes
-follow-up work beyond the exercise's 45-minute timebox.
+The final combined testing and deployment pass is deferred at the user's request
+to meet the 6:27 pm implementation deadline. See [TESTING.md](TESTING.md) for
+completed checks and the remaining validation checklist.
 
-First-pass scope and tradeoffs:
+## Analysis pipeline
 
-- One OpenAI extraction call per saved-note view; `LLM_API_KEY` is required.
-- Exact/brand/synonym lookup, four explicit shorthand expansions, and conservative
-  fuzzy matching over at most 64 retrieved aliases. Ambiguous matches abstain.
-- Model-suggested names are collected but deliberately do not override lexical
-  evidence in this pass. Short unknown abbreviations remain unresolved.
-- Local catalog only during analysis; live fallback, strength/form extraction,
-  product matching, and import-job hardening remain follow-up work.
-- Local ORM/import commits invalidate the index; a 60-second TTL bounds staleness
-  from other processes or external writes. Index rebuilding is lazy.
-- Notes are capped at 20,000 characters and 200 extracted mentions. Editing
-  aborts the browser request, though an in-flight provider call can still finish.
-- Deterministic tests mock the LLM. Live checks with the configured model are
-  recorded below; repeat them when changing the prompt or model.
-
-First-pass verification: all 73 backend tests pass, including both transcript
-answer keys with mocked extraction; the frontend TypeScript/Vite build passes.
-Live extraction with the default `gpt-4.1-mini` returns all 7 expected mentions from
-transcript 01 and all 12 from transcript 02, with correct spans, RxCUIs, match
-types, and corrections. Those live checks used 14,689 RxNav ingredient concepts
-plus seed brand aliases in memory, without changing the application's catalog.
-With only seed data, MTX, vitamin D, and folic acid remain unresolved as expected.
-The checks did not fetch full brand enrichment and are not a general accuracy
-benchmark.
-
-Live testing exposed global list numbering in the model's occurrence field and
-omitted references in dosing discussions. The prompt now explicitly requires
-per-name literal occurrence counts and mentions across all note sections,
-including pharmacy confirmations and dosing discussions. The anchoring code
-also recovers an incorrect number when the literal name occurs exactly once;
-ambiguous repeated text still requires a valid occurrence. Regression tests
-cover this distinction, including a non-medication ASA score before an ASA
-medication mention.
-
-An additional live example combined Unicode, an ASA physical-status score,
-ASA medication use, APAP, and negated aspirin use. Small models incorrectly
-treated the ASA score as medication, so anchoring now excludes explicit ASA
-score/class phrases with a numeric or Roman-numeral value. `gpt-4o-mini` also
-omitted the negated aspirin mention; `gpt-4.1-mini` retained it and passed both
-supplied notes, so it is the new default. `LLM_MODEL` remains configurable.
-The extra example now passes, but this narrow guard is not a general solution
-to all ambiguous abbreviations.
-
-The provider request uses strict JSON-schema output, following the
-[official OpenAI structured-output documentation](https://developers.openai.com/api/docs/guides/structured-outputs).
-
-## Analysis flow
+1. **Extract names.** The backend calls OpenAI with a strict JSON schema and
+   validates the response with Pydantic. The default is `gpt-4.1-mini`, configurable
+   through `LLM_MODEL`. The model returns literal names, occurrence numbers, and
+   optional suggested names. It does not supply RxCUIs or authoritative drug data.
+2. **Anchor source text.** Python locates exact, case-sensitive whole-name
+   occurrences. Unknown source text is rejected. If a name occurs only once,
+   its location is unambiguous even if the model numbers it incorrectly.
+   Repeated names require a valid occurrence number. Duplicates and overlapping
+   fragments are resolved before rendering.
+3. **Resolve against the catalog.** Exact name, individual brand, and synonym
+   maps handle direct matches. Explicit expansions cover HCTZ, APAP, ASA, and
+   MTX. A trigram inverted index retrieves at most 64 aliases for fuzzy ranking.
+   Similarity, edit-distance limits, and a margin between distinct concepts
+   determine acceptance. Ambiguous results remain unresolved.
+4. **Check missing concepts.** A bounded RxNav fallback performs exact searches
+   for unresolved names or reviewed shorthand expansions. It accepts verified
+   ingredient concepts, or brands/precise ingredients related to exactly one
+   ingredient. Multiple candidate IDs, combination brands, unsupported term
+   types, network failures, and exhausted budgets leave the mention unresolved.
+5. **Extend the highlight.** A deterministic parser attaches adjacent, literal
+   strength and form text on the same line. Matching always uses the drug name
+   alone. The frontend renders the expanded source span and displays the details.
 
 ```mermaid
 flowchart LR
-    A[Saved visit note] --> B[LLM extraction]
-    B --> C[Validate source spans]
-    C --> D[Indexed catalog matching]
-    D --> E[Matched or unresolved mentions]
-    D -. Missing catalog entry .-> F[Bounded RxNav fallback]
-    F --> E
-    E --> G[Inline highlights and medication details]
+    Note[Saved note] --> Extract[Structured LLM extraction]
+    Extract --> Anchor[Validated source spans]
+    Anchor --> Index[Indexed RxNorm matching]
+    Index --> Details[Adjacent strength and form]
+    Index -. Unresolved name .-> RxNav[Bounded exact RxNav lookup]
+    RxNav --> Details
+    Details --> UI[Highlights and medication details]
 ```
 
-### 1. Extract mentions with the LLM
+## Matching and scaling
 
-Make one extraction call per analyzed note. Request structured output, validated
-with Pydantic, containing:
+The complete local catalog is indexed once per snapshot, including individual
+CSV brand aliases. An analysis does not load the first API page as though it
+were the entire catalog, and it does not scan every ingredient for each mention.
+Expensive fuzzy comparisons operate on the retrieved shortlist.
 
-- The medication text exactly as written.
-- Occurrence or surrounding-context information to distinguish repeated text.
-- Suggested corrected spelling or abbreviation expansion, when applicable.
-- Optional strength and dose form explicitly present in the note.
+Immutable snapshots contain plain data rather than attached SQLAlchemy objects.
+Local ORM commits and bulk-import batches invalidate the cache. Lazy rebuilding
+publishes a complete snapshot under a lock; a 60-second TTL bounds staleness from
+other processes or external writers. The original catalog-browser lookup helper
+is not used for per-mention matching.
 
-Include brands, shorthand, misspellings, supplements, and references to held,
-discontinued, or negated medications. This feature identifies mentions; it does
-not infer an active medication list. Exclude conditions, laboratory values,
-scores, and generic phrases such as "blood thinner" that do not identify a drug.
+Model-suggested names cannot override lexical evidence. Short unknown strings
+are not fuzzily expanded. Similarity is not presented as a calibrated probability;
+`confidence` remains unset. Distinct aliases for one RxCUI are not treated as
+competing concepts.
 
-Treat note content as data, including any instructions embedded in it. The model
-must not supply authoritative RxCUIs or medication attributes. Its suggested
-names are inputs to retrieval and must be checked against catalog evidence.
-
-### 2. Anchor highlights to the original note
-
-Compute offsets in Python by locating each extracted literal substring in the
-unchanged note. Use occurrence/context information to disambiguate repetitions;
-do not always select the first occurrence or automatically annotate every copy.
-Reject invented text and ambiguous or invalid spans.
-
-For each returned mention, enforce:
-
-```python
-0 <= mention.start < mention.end <= len(note)
-note[mention.start:mention.end] == mention.text
-```
-
-Sort spans, remove duplicate spans, and resolve overlaps before returning them.
-Keep separate occurrences even when they resolve to the same medication.
-
-Use a consistent offset convention across the API and UI. Python offsets count
-Unicode code points, so the frontend can slice `Array.from(analysis.note)` rather
-than use JavaScript UTF-16 string offsets directly. This avoids misplaced
-highlights after characters such as emoji.
-
-### 3. Retrieve candidates from the entire catalog
-
-Build a reusable in-memory index from the medications table, including all
-catalog rows rather than the first page of the medications API:
-
-- An exact lookup map for normalized ingredient names, individual brand names,
-  and synonyms. Retain all candidates when an alias maps to multiple concepts.
-- A small explicit shorthand map for `HCTZ`, `APAP`, `ASA`, and `MTX`, whose
-  expanded names are resolved against verified records.
-- A character-trigram inverted index mapping fragments to aliases. Retrieve a
-  small shortlist from shared fragments, then rank it using edit distance.
-
-Normalize case and whitespace for retrieval while retaining the original alias
-and its kind for display. Preserve meaningful distinctions in medication names.
-Use both the written name and validated model-suggested variants as retrieval
-inputs; a model suggestion alone is insufficient evidence for a match.
-
-Building an index may scan the catalog once per snapshot. Matching a mention
-must not repeatedly scan all approximately 15,000 concepts. In particular, avoid
-calling the existing `local_lookup` brand path for every mention: it currently
-loads all medication rows and scans their comma-separated brand names.
-
-Store plain immutable records in the index, not live SQLAlchemy objects. Rebuild
-after committed seed, scrape, or import changes and atomically publish the new
-snapshot. Coalesce import invalidations so the next analysis obtains current
-data without rebuilding for every imported row. This approach fits the scaffold's
-single-process deployment; multiple workers would need shared catalog versioning
-or database-backed alias indexes.
-
-### 4. Resolve conservatively
-
-Apply these rules in order:
-
-1. Resolve exact ingredient, brand, or synonym aliases when unambiguous.
-2. Resolve known shorthand expansions, using the mention's context when needed.
-3. Rank fuzzy candidates and accept only when similarity is sufficient and the
-   winning concept is clearly separated from the next distinct concept.
-4. Leave uncertain mentions unresolved with `matched=false` and no fabricated
-   medication data.
-
-Choose thresholds using representative examples and test plausible competing
-names. Do not fuzzy-match short abbreviations indiscriminately. Multiple aliases
-of the same RxCUI should not count as competing concepts. A lexical score is not
-a calibrated probability; leave `confidence` unset unless its meaning is defined.
-
-Keep spelling corrections distinct from brand and shorthand mappings:
-
-| Written text | Normalized concept | Match type | Correction shown |
-| --- | --- | --- | --- |
-| `metformin` | metformin | exact | None |
-| `metformn` | metformin | misspelling | `metformn → metformin` |
-| `Glucophage` | metformin | brand | None |
-| `HCTZ` | hydrochlorothiazide | shorthand | None |
-| Misspelled brand | Verified ingredient | misspelling | Written brand → correctly spelled brand |
-
-For a missing local concept, use a bounded, cached RxNav fallback with explicit
-timeouts and a per-analysis request budget. Validate the returned concept and
-ingredient relationship instead of accepting the first ID. The existing live
-lookup can return a non-ingredient term type. Ambiguous or combination products
-must not be silently reduced to a single ingredient just to fit the schema.
-
-RxNav approximate search is an optional additional retrieval path. NLM describes
-its approximate results as candidates for review, so the top result should not
-automatically become a confirmed match. See the
-[RxNorm approximate matching documentation](https://lhncbc-portal.lhcaws-prod-pub.nlm.nih.gov/RxNav/news/RxNormApproxMatch.html).
-
-## User experience
-
-Analyze after loading a saved visit and after a successful note save. Keep the
-existing textarea for editing. In viewing mode, render the original note as React
-text slices interleaved with accessible highlighted controls, preserving spacing
-and line breaks.
-
-Clicking or keyboard-focusing a mention opens a detail panel with:
-
-- The original mention and normalized medication name.
-- RxCUI, term type, available brand names, drug class, and data source.
-- Match type and an explicit spelling correction when applicable.
-- Strength and form when extracted from the note.
-
-Use the label **Medication mentions**. Highlight each occurrence; an optional
-summary can group entries by RxCUI and show occurrence counts. Distinguish
-unresolved mentions with text as well as styling.
-
-Provide loading, retry, no-mentions, and unresolved states. An LLM timeout,
-malformed response, or missing configuration must produce an analysis error,
-not a successful empty result. Keep the note readable during failures. RxNav
-failure can leave individual mentions unresolved without hiding successful
-local matches.
-
-Discard results if the visit or saved note changed while analysis was running.
-Render highlights only when `analysis.note` matches the displayed note. Avoid
-duplicate requests for an unchanged note while the page remains mounted.
-
-## Implementation boundaries
-
-Reuse `MedicationMention` and `NoteAnalysis` in `backend/app/schemas.py`, along
-with the corresponding frontend types. Set `implemented=true` once the analysis
-path is implemented. Keep the endpoint small and separate responsibilities:
-
-| File | Responsibility |
-| --- | --- |
-| `backend/app/routers/analysis.py` | Load the visit, orchestrate analysis, return the existing contract and clear errors |
-| New extraction module | Provider call, structured-output validation, and source-span validation |
-| New matching module | Catalog index, candidate retrieval, resolution, and bounded fallback |
-| `frontend/src/pages/VisitPage.tsx` | Analysis lifecycle, saved-note consistency, and integration |
-| New note/detail components | Accessible highlights and structured medication details |
-| `backend/tests/` | Deterministic extraction, matching, endpoint, and importer regression tests |
-
-Use the existing backend LLM settings and keep the API key on the server. Keep
-the current FastAPI, React, Postgres, Docker, and Render architecture.
-
-## Verification
-
-Use mocked LLM output for deterministic tests while exercising the real index
-and matching logic. Cover exact names, brands, shorthand, typos, supplements,
-repeated occurrences, alias collisions, ambiguous matches, and missing entries.
-Also cover fabricated spans, overlapping spans, Unicode, empty notes, malformed
-provider output, and provider failures.
-
-The supplied answer keys define these acceptance cases:
-
-| Fixture | Mentions | Unique concepts |
+| Written name | Match type | Correction |
 | --- | --- | --- |
-| `test-transcripts/transcript-01.txt` | 7 | 6 |
-| `test-transcripts/transcript-02.txt` | 12 | 11 |
+| metformin | exact | None |
+| metformn | misspelling | metformn → metformin |
+| Glucophage | brand | None |
+| HCTZ | shorthand | None |
+| Misspelled brand | misspelling | Written brand → correctly spelled brand |
 
-Check the expected spans, RxCUIs, match types, and corrections—not only counts.
-`MTX`, vitamin D, and folic acid are absent from the seed catalog. With only seed
-data, they should resolve through a verified fallback or remain unresolved;
-after import, verify their local resolution. Test non-medication text and close
-competing names against the full catalog to expose false positives.
+The fallback has a per-analysis limit of 10 HTTP requests and an eight-second
+request-admission deadline, with individual timeouts capped at three seconds.
+An in-flight request may finish after the admission deadline. A bounded process
+cache retains successful resolutions for one hour and confirmed misses for one
+minute; transient failures are not cached as absence. Only medication names go
+to RxNav, and this path does not modify the catalog. Set
+`RXNAV_FALLBACK_ENABLED=false` to disable it.
 
-Replace the existing test that expects an empty analysis stub. Add focused UI
-checks for unchanged reconstructed text, keyboard access, and discarded stale
-responses. Confirm that repeated lookups reuse the index and rank a candidate
-shortlist instead of all catalog rows.
+See [RxNav exact-name search](https://lhncbc.nlm.nih.gov/RxNav/APIs/api-RxNorm.findRxcuiByString.html).
+Approximate remote results are not automatically accepted as verified matches.
 
-Run the backend tests and frontend production build before delivery, and repeat
-the sample-note smoke test on the deployed application. Local verification
-results are recorded above; a deployed browser smoke test is still outstanding.
+## Source spans, context, and dosage
 
-## Stretch goals and priorities
+Every returned highlight satisfies `note[start:end] == text`. The frontend uses
+`Array.from(note)` so its slices follow Python Unicode code-point offsets.
+`name_text` preserves the original drug name when `text` expands to include
+strength or form. A correction therefore reads `metformn → metformin`, even
+when the clickable highlight is `metformn 500 mg tablets`.
 
-**Strength and form:** extract adjacent text such as `500 mg` or `inhaler` and
-include it in the highlight when span validation succeeds. Keep the ingredient
-match separate from product identification. Populate `product_rxcui` only after
-verifying a compatible RxNorm product; extracted dosage alone is not proof.
+Strength/form recognition supports common units, decimals, concentrations,
+parenthesized details, and forms such as tablets, capsules, inhalers, solutions,
+and creams. Either strength or form may come first. It stops at another mention,
+a line break, frequency instructions, or unrelated text. Unitless numbers are
+not inferred to be strengths. Unresolved names can still show observed details.
 
-**Import data preservation:** the current names-first import calls `_rows_for`
-with empty brand/class maps, and `_write` overwrites existing enrichment with
-nulls. A failed or disabled enrichment phase can therefore erase valid data.
-Make the first pass update names and term types only. Update enrichment only
-when its fetch succeeded, distinguishing a verified empty result from unavailable
-data. Add regression tests for reimport, disabled enrichment, and failed fetches.
+Ingredient identity does not establish a specific product. `product_rxcui` and
+`product_name` remain unset; exact SCD/SBD product resolution is future work.
 
-**Further import hardening:** add bounded retries and visible partial-failure
-reporting. A daemon thread can also disappear while persisted state remains
-`running`, blocking future imports. Proper recovery needs an atomic database job
-claim, owner token, heartbeat, and expiring lease. Defer that broader lifecycle
-work until the core feature is complete.
+The prompt includes supplements and held, stopped, negated, and historical drug
+mentions. These are **medication mentions**, not an active prescription list.
+Live checks exposed missed dosing-discussion references and incorrect global
+occurrence numbering, so the prompt explicitly addresses both. A narrow local
+rule excludes explicit ASA score/class phrases followed by a number or Roman
+numeral. This is not a general solution to every ambiguous abbreviation.
 
-## Timebox and delivery
+## User interface
 
-| Budget | Focus |
-| --- | --- |
-| 5 minutes | Verify setup, configure the LLM, start deployment/catalog import |
-| 15 minutes | Implement extraction, span validation, and indexed matching |
-| 10 minutes | Integrate highlights, details, and analysis states |
-| 10 minutes | Run focused tests, build, and exercise both transcripts |
-| 5 minutes | Verify the deployed feature and record the walkthrough |
+Saved notes are analyzed on load and after a successful save. The original note
+remains readable during loading and failures. Highlights are keyboard-accessible
+buttons that reveal RxCUI, normalized name, term type, brands, class, source,
+match type, correction, and observed strength/form.
 
-Treat this as a prioritization budget. If the core flow takes longer, leave
-stretch work documented and unfinished. With more time, improve evaluation on
-additional notes, context-sensitive ambiguity handling, product/combination
-support, shared index invalidation, and import recovery.
+Unresolved mentions use a distinct style and explicit explanation. Errors show
+a retry action instead of a misleading empty result. Responses are accepted only
+for the requested visit and exact saved note; abort and lifecycle guards prevent
+stale results from replacing current content. Keeping the analyzer mounted while
+editing avoids another paid call when editing is canceled. StrictMode's abandoned
+initial effect does not start a duplicate request.
 
-Submit the working Render URL, forked repository link, and a short video showing
-the feature and explaining matching, uncertainty, testing, and remaining limits.
-Include the coding-agent transcript as the optional bonus deliverable.
+## Catalog import resilience
+
+- Names-first upserts preserve existing brand/class data. Missing, disabled, or
+  failed enrichment cannot erase it. Partial brand results merge existing aliases;
+  existing class assignments are retained conservatively when warnings occur.
+- Import requests share a limiter paced at 15 requests per second. Transient
+  transport errors, 429s, and server errors get at most three attempts. Retry-After
+  seconds/dates are honored; excessive waits fail visibly instead of hanging.
+- Empty or malformed ingredient payloads fail the job. Enrichment failures produce
+  a completed job with warnings, whose count and first 20 messages are visible in
+  the catalog UI. Successfully written ingredient batches remain available.
+- An atomic PostgreSQL claim assigns an owner token and a renewable 120-second
+  lease. A heartbeat runs every 20 seconds. Catalog batches lock and verify
+  ownership in the same transaction as their writes. Stale owners cannot
+  overwrite a replacement worker's status or catalog batches.
+- Expired jobs appear interrupted and can be restarted. Restarting repeats an
+  idempotent import; it does not resume from a saved checkpoint. Proper pacing
+  means full class/brand enrichment may take several minutes.
+
+Migration `005_import_leases_and_warnings.py` adds the ownership and warning
+fields. Apply `alembic upgrade head` before running the updated application.
+The production container already runs migrations at startup.
+
+## Configuration and delivery
+
+Backend settings come from `backend/.env` or service environment variables.
+`frontend/.env` does not configure the backend. Keep database credentials and
+LLM keys server-side. The defaults are `LLM_PROVIDER=openai`,
+`LLM_MODEL=gpt-4.1-mini`, and enabled RxNav fallback.
+
+The supplied deployment is https://visit-tracker-fv1z.onrender.com. A read-only
+check during implementation returned HTTP 200 for the homepage, healthy database
+status, and 14,689 catalog concepts. This checks the existing deployment, not
+these latest local changes. Publishing the changes, applying the migration on
+that deployment, and a deployed end-to-end smoke test belong to the next pass.
+
+Remaining limits include exact product/combination representation, broader
+context evaluation, resumable import checkpoints, and shared index invalidation
+without a TTL. The short explanation video and optional agent transcript remain
+submission deliverables; no video was recorded in this implementation pass.

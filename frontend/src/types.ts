@@ -50,6 +50,8 @@ export interface ImportJob {
   error: string | null;
   started_at: string | null;
   finished_at: string | null;
+  warning_count?: number;
+  warnings?: string[];
 }
 
 export interface ScrapeResult {
@@ -75,6 +77,7 @@ export type MatchType =
 
 export interface MedicationMention {
   text: string;
+  name_text?: string | null;
   start: number;
   end: number;
   matched: boolean;

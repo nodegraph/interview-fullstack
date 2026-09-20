@@ -103,6 +103,7 @@ export default function MedicationsPage() {
     return () => {
       if (pollRef.current !== null) {
         window.clearInterval(pollRef.current);
+        pollRef.current = null;
       }
     };
   }, [pollJob]);
@@ -227,10 +228,22 @@ export default function MedicationsPage() {
       )}
 
       {job && job.state === "done" && (
-        <p className="mb-6 rounded bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          Import finished: {job.created.toLocaleString()} created,{" "}
-          {job.updated.toLocaleString()} updated.
-        </p>
+        <div className={`mb-6 rounded px-4 py-3 text-sm ${job.warning_count ? "bg-amber-50 text-amber-900" : "bg-emerald-50 text-emerald-800"}`} role="status">
+          <p>
+            Import finished{job.warning_count ? " with warnings" : ""}: {job.created.toLocaleString()} created,{" "}
+            {job.updated.toLocaleString()} updated.
+          </p>
+          {!!job.warning_count && (
+            <>
+              <p className="mt-2">{job.warning_count} enrichment request{job.warning_count === 1 ? "" : "s"} failed. Existing details were preserved; retry the import to fill missing details.</p>
+              {!!job.warnings?.length && (
+                <ul className="mt-2 list-disc pl-5">
+                  {job.warnings.map((warning, index) => <li key={index}>{warning}</li>)}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
       )}
 
       {job && job.state === "error" && (

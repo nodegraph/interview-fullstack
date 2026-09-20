@@ -7,7 +7,10 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.config import get_settings
 from app.medication_extraction import ExtractionError, anchor_mentions, extract_mentions
+from app.medication_details import enrich_mentions
+from app.medication_fallback import RxNavFallback
 from app.medication_matching import resolve_name
 from app.models import Visit
 from app.schemas import MedicationMention, NoteAnalysis
@@ -23,15 +26,21 @@ def analyze_note(db: Session, note: str) -> list[MedicationMention]:
     # Repeated source occurrences remain distinct; resolve each spelling once.
     resolved: dict[tuple[str, str | None], dict] = {}
     results = []
-    for mention in mentions:
-        key = (mention.text, mention.suggested_name)
-        if key not in resolved:
-            resolved[key] = resolve_name(db, mention.text, mention.suggested_name)
-        results.append(MedicationMention(
-            text=mention.text, start=mention.start, end=mention.end,
-            **resolved[key],
-        ))
-    return results
+    use_fallback = get_settings().rxnav_fallback_enabled
+    with RxNavFallback() as fallback:
+        for mention in mentions:
+            key = (mention.text, mention.suggested_name)
+            if key not in resolved:
+                match = resolve_name(db, mention.text, mention.suggested_name)
+                if not match["matched"] and use_fallback:
+                    match = fallback.resolve(mention.text) or match
+                resolved[key] = match
+            results.append(MedicationMention(
+                text=mention.text, name_text=mention.text,
+                start=mention.start, end=mention.end,
+                **resolved[key],
+            ))
+    return enrich_mentions(note, results)
 
 
 @router.post("/visits/{visit_id}/analyze")
