@@ -327,6 +327,10 @@ def _write(db: Session, rows: list[dict]) -> tuple[int, int]:
             )
         )
         db.commit()
+        # PostgreSQL upserts bypass the ORM change events used by the matcher.
+        from app.medication_matching import invalidate_index
+
+        invalidate_index(db)
         _update(processed=min(start + len(batch), len(rows)))
     return created, len(rows) - created
 

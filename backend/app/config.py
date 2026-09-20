@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     rxnav_base_url: str = "https://rxnav.nlm.nih.gov/REST"
 
     # LLM configuration for the take-home medication-detection task.
-    # These are optional in the scaffold; the candidate wires them up.
+    # Required for analysis; the rest of the app works without a key.
     llm_provider: str = "openai"
     llm_model: str = "gpt-4o-mini"
     llm_api_key: str | None = None

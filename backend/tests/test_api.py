@@ -110,24 +110,83 @@ def test_rxnorm_lookup_catalog(clean_catalog, client):
     assert by_brand.json()["medication"]["name"] == "metformin"
 
 
-def test_analyze_returns_empty_stub(client):
-    """The analyze endpoint is scaffolding: it returns the contract, not results.
-
-    Implementing detection + matching is the take-home exercise (EXERCISE.md).
-    """
-    client.post("/api/seed")
+def analysis_visit(client, note):
     patients = client.get("/api/patients").json()["patients"]
     smith = next(row for row in patients if row["name"] == "John Smith")
     visits = client.get(f"/api/patients/{smith['id']}/visits").json()["visits"]
     annual = next(v for v in visits if v["visit_date"] == "2026-01-15")
+    response = client.put(f"/api/visits/{annual['id']}", json={"notes": note})
+    assert response.status_code == 200
+    return annual["id"]
 
-    response = client.post(f"/api/visits/{annual['id']}/analyze")
+
+def test_analyze_resolves_catalog_and_preserves_occurrences(clean_catalog, client, monkeypatch):
+    """Only detection is mocked: the endpoint resolves real seeded catalog rows."""
+    from app.medication_extraction import ExtractedMention
+    from app.routers import analysis as analysis_router
+
+    note = "💊 Continue metformn. Previously Glucophage. Hold HCTZ. Restart metformn."
+    detected = [
+        ExtractedMention(text="metformn", occurrence=1, suggested_name="metformin"),
+        ExtractedMention(text="Glucophage", occurrence=1, suggested_name="metformin"),
+        ExtractedMention(text="HCTZ", occurrence=1, suggested_name="hydrochlorothiazide"),
+        ExtractedMention(text="metformn", occurrence=2, suggested_name="metformin"),
+    ]
+    monkeypatch.setattr(analysis_router, "extract_mentions", lambda _note: detected)
+    visit_id = analysis_visit(client, note)
+
+    response = client.post(f"/api/visits/{visit_id}/analyze")
     assert response.status_code == 200
     analysis = response.json()["analysis"]
 
-    assert analysis["implemented"] is False  # candidate flips this
-    assert analysis["mentions"] == []
-    assert analysis["note"]  # the note text still comes back for the UI
+    assert analysis["implemented"] is True
+    assert analysis["note"] == note
+    mentions = analysis["mentions"]
+    assert len(mentions) == 4
+    assert [item["match_type"] for item in mentions] == [
+        "misspelling", "brand", "shorthand", "misspelling"
+    ]
+    assert [item["correction"] for item in mentions] == [
+        "metformin", None, None, "metformin"
+    ]
+    assert [item["medication"]["rxcui"] for item in mentions] == [
+        "6809", "6809", "5487", "6809"
+    ]
+    for item in mentions:
+        assert item["matched"] is True
+        assert note[item["start"] : item["end"]] == item["text"]
+    assert mentions[0]["start"] != mentions[3]["start"]
+
+
+def test_analyze_empty_note_does_not_call_provider(clean_catalog, client, monkeypatch):
+    from app.routers import analysis as analysis_router
+
+    def unexpected_extraction(_note):
+        raise AssertionError("Empty notes should not call the provider")
+
+    monkeypatch.setattr(analysis_router, "extract_mentions", unexpected_extraction)
+    visit_id = analysis_visit(client, "")
+    response = client.post(f"/api/visits/{visit_id}/analyze")
+
+    assert response.status_code == 200
+    assert response.json()["analysis"]["mentions"] == []
+    assert response.json()["analysis"]["implemented"] is True
+
+
+def test_analyze_provider_unavailable_returns_error(clean_catalog, client, monkeypatch):
+    from app.medication_extraction import ExtractionError
+    from app.routers import analysis as analysis_router
+
+    def unavailable(_note):
+        raise ExtractionError("Configure LLM_API_KEY to analyze notes.", status_code=503)
+
+    monkeypatch.setattr(analysis_router, "extract_mentions", unavailable)
+    visit_id = analysis_visit(client, "Continue metformin.")
+    response = client.post(f"/api/visits/{visit_id}/analyze")
+
+    assert response.status_code == 503
+    assert "LLM_API_KEY" in response.json()["error"]
+    assert "analysis" not in response.json()
 
 
 def test_analyze_unknown_visit_404(client):

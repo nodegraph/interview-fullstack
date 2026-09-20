@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { formatDate } from "../dates";
+import MedicationNotes from "../components/MedicationNotes";
 
 interface VisitDetail {
   id: string;
@@ -39,22 +40,31 @@ export default function VisitPage() {
       return;
     }
 
+    const controller = new AbortController();
+    let active = true;
+    setLoading(true);
+    setVisit(null);
+    setEditMode(false);
     const loadVisit = async () => {
       try {
-        const res = await fetch(`/api/visits/${visitId}`);
+        const res = await fetch(`/api/visits/${visitId}`, { signal: controller.signal });
         const data = await res.json();
-        if (data.visit) {
+        if (active && res.ok && data.visit) {
           setVisit(data.visit);
           setNotes(data.visit.notes || "");
           setChiefComplaint(data.visit.chief_complaint || "");
         }
       } catch (e) {
-        console.error("Failed to load visit:", e);
+        if (!controller.signal.aborted) console.error("Failed to load visit:", e);
       }
-      setLoading(false);
+      if (active) setLoading(false);
     };
 
     void loadVisit();
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [visitId, navigate]);
 
   const handleSave = async () => {
@@ -186,9 +196,7 @@ export default function VisitPage() {
             placeholder="Enter visit notes..."
           />
         ) : visit.notes ? (
-          <p className="whitespace-pre-wrap leading-relaxed text-gray-700">
-            {visit.notes}
-          </p>
+          <MedicationNotes visitId={visit.id} note={visit.notes} />
         ) : (
           <p className="italic text-gray-400">No notes recorded</p>
         )}

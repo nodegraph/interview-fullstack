@@ -31,8 +31,9 @@ deliverables. Sample notes to test against are in
 - **RxNorm Catalog** — search and page through the reference catalog at
   `/medications`, and bulk-import the full ~15k-concept RxNorm ingredient set
   from the live RxNav API
-- **Medication detection** — the analyze endpoint and its contract are wired up;
-  detection and highlighting are the exercise (see [EXERCISE.md](./EXERCISE.md))
+- **Medication detection** — LLM extraction with indexed RxNorm matching for
+  exact names, brands, shorthand, and misspellings. Select a highlighted mention
+  to inspect its RxNorm details and spelling correction.
 - **DB Status Widget** — persistent status bar showing database connection
 
 ## API
@@ -52,7 +53,7 @@ deliverables. Sample notes to test against are in
 | `GET /api/medications/import` | Progress of the current/last import |
 | `POST /api/medications/scrape` | Resolve specific names against RxNav |
 | `GET /api/rxnorm/lookup?name=` | Exact normalized RxNorm lookup (catalog → RxNav) |
-| `POST /api/visits/{id}/analyze` | Detect medications in a visit note (**exercise**) |
+| `POST /api/visits/{id}/analyze` | Detect and resolve medication mentions in a saved visit note |
 
 ## Local development
 
@@ -125,8 +126,22 @@ LLM_MODEL=gpt-4o-mini
 LLM_API_KEY=sk-...
 ```
 
-These are optional for running the app — the analyze endpoint ships as an empty
-stub until you implement the exercise.
+The app runs without these settings, but medication analysis requires the key.
+Only the `openai` provider is supported in this first pass. Set the same variables
+in the Render service environment for deployment.
+
+Open a saved visit to analyze its note automatically; saving edits reanalyzes it.
+Select a highlight to see the normalized concept, RxCUI, match type, and any
+spelling correction. Amber highlights are detected mentions without a confident
+catalog match. Provider/configuration failures show an error and a retry button.
+
+Matching uses the complete local catalog, including separate brand aliases, with
+an exact map and a trigram shortlist for fuzzy comparisons. Import the full
+catalog to resolve ingredients missing from the 20-concept seed, including MTX,
+vitamin D, and folic acid. This first pass does not perform live RxNav fallback
+during analysis, infer product dosages, or harden the importer. Notes are limited
+to 20,000 characters and 200 extracted mentions per analysis. See
+[SOLUTION.md](./SOLUTION.md) for the design and remaining work.
 
 ## Tests
 
@@ -157,8 +172,11 @@ Key files for the exercise:
 backend/app/rxnorm.py                    RxNorm catalog, RxNav client, per-name scraper
 backend/app/rxnorm_bulk.py               bulk RxNorm catalog importer
 backend/app/routers/medications.py       catalog + lookup + scrape endpoints
-backend/app/routers/analysis.py          POST /analyze — the stub to implement
+backend/app/routers/analysis.py          POST /analyze orchestration
+backend/app/medication_extraction.py     structured LLM extraction and source spans
+backend/app/medication_matching.py       cached alias/trigram index and resolution
 frontend/src/pages/VisitPage.tsx         visit note rendering
+frontend/src/components/MedicationNotes.tsx  highlights and RxNorm details
 frontend/src/pages/MedicationsPage.tsx   RxNorm catalog browser
 ```
 
